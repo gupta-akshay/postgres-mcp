@@ -1,0 +1,7 @@
+# Postgres image for integration/E2E tests.
+# Bakes in both extensions postgres-mcp exercises: pg_stat_statements + hypopg.
+FROM postgres:17
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-17-hypopg \
+    && rm -rf /var/lib/apt/lists/*
