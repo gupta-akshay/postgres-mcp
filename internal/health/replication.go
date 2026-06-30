@@ -47,7 +47,8 @@ func runReplicationHealth(ctx context.Context, d db.Querier) Result {
 		det.IsReplica, _ = recRows[0]["is_replica"].(bool)
 	}
 
-	// Active standbys (only meaningful on primary)
+	// Active standbys (only meaningful on primary).
+	// replay_lag_critical is true when a streaming standby's replay lag exceeds 5 minutes.
 	standbyRows, err := d.InternalQuery(ctx, `
 		SELECT
 			COALESCE(client_addr::text, 'local') AS client_addr,
@@ -58,7 +59,8 @@ func runReplicationHealth(ctx context.Context, d db.Querier) Result {
 			replay_lsn::text,
 			write_lag::text,
 			flush_lag::text,
-			replay_lag::text
+			replay_lag::text,
+			(state = 'streaming' AND replay_lag IS NOT NULL AND replay_lag > INTERVAL '5 minutes') AS replay_lag_critical
 		FROM pg_stat_replication
 		ORDER BY client_addr
 	`)
@@ -114,10 +116,21 @@ func runReplicationHealth(ctx context.Context, d db.Querier) Result {
 		}
 	}
 
-	laggingStandbys := 0
+	// Build a lookup for lag-critical standbys using the SQL-computed flag.
+	lagCritical := make(map[string]bool, len(standbyRows))
+	for _, r := range standbyRows {
+		if critical, _ := r["replay_lag_critical"].(bool); critical {
+			lagCritical[db.ToString(r["client_addr"])] = true
+		}
+	}
+
+	notStreamingCount := 0
+	lagCriticalCount := 0
 	for _, s := range det.Standbys {
 		if s.State != "streaming" {
-			laggingStandbys++
+			notStreamingCount++
+		} else if lagCritical[s.ClientAddr] {
+			lagCriticalCount++
 		}
 	}
 
@@ -134,9 +147,13 @@ func runReplicationHealth(ctx context.Context, d db.Querier) Result {
 		status = StatusWarning
 		msg += fmt.Sprintf(" Warning: %d inactive slot(s) may cause WAL accumulation.", inactiveSlots)
 	}
-	if laggingStandbys > 0 {
+	if notStreamingCount > 0 {
 		status = StatusWarning
-		msg += fmt.Sprintf(" Warning: %d standby(s) not in streaming state.", laggingStandbys)
+		msg += fmt.Sprintf(" Warning: %d standby(s) not in streaming state.", notStreamingCount)
+	}
+	if lagCriticalCount > 0 {
+		status = StatusWarning
+		msg += fmt.Sprintf(" Warning: %d streaming standby(s) have replay lag > 5 minutes.", lagCriticalCount)
 	}
 
 	return Result{Check: CheckReplication, Status: status, Message: msg, Details: det}

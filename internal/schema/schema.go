@@ -103,12 +103,17 @@ func ListObjects(ctx context.Context, d db.Querier, schemaName string) ([]Object
 		WHERE table_schema = $1
 		UNION ALL
 		SELECT
-			sequence_name AS name,
-			'SEQUENCE'    AS type,
-			NULL          AS size,
-			sequence_schema AS owner
-		FROM information_schema.sequences
-		WHERE sequence_schema = $1
+			s.sequence_name        AS name,
+			'SEQUENCE'             AS type,
+			NULL                   AS size,
+			r.rolname              AS owner
+		FROM information_schema.sequences s
+		JOIN pg_class c
+			ON  c.relname       = s.sequence_name
+			AND c.relnamespace  = (SELECT oid FROM pg_namespace WHERE nspname = s.sequence_schema)
+			AND c.relkind       = 'S'
+		JOIN pg_roles r ON r.oid = c.relowner
+		WHERE s.sequence_schema = $1
 		ORDER BY type, name
 	`, schemaName)
 	if err != nil {

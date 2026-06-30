@@ -130,10 +130,12 @@ func duplicateIndexes(ctx context.Context, d db.Querier) ([]duplicateIndex, erro
 			AND s1.indexrelid < s2.indexrelid
 		JOIN pg_index i1 ON i1.indexrelid = s1.indexrelid
 		JOIN pg_index i2 ON i2.indexrelid = s2.indexrelid
-		WHERE i1.indkey::text = i2.indkey::text
-		  AND i1.indpred  IS NOT DISTINCT FROM i2.indpred
-		  AND i1.indexprs IS NOT DISTINCT FROM i2.indexprs
-		  AND i1.indclass::text = i2.indclass::text
+		WHERE i1.indkey::text        = i2.indkey::text
+		  AND i1.indpred             IS NOT DISTINCT FROM i2.indpred
+		  AND i1.indexprs            IS NOT DISTINCT FROM i2.indexprs
+		  AND i1.indclass::text      = i2.indclass::text
+		  AND i1.indoption::text     = i2.indoption::text
+		  AND i1.indcollation::text  = i2.indcollation::text
 		ORDER BY s1.schemaname, s1.relname
 	`)
 	if err != nil {

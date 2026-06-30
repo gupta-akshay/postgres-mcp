@@ -14,6 +14,41 @@ import (
 
 var ctx = context.Background()
 
+// ─── resolveChecks (pure unit) ────────────────────────────────────────────────
+
+func TestResolveChecks_All(t *testing.T) {
+	for _, input := range [][]string{nil, {}, {"all"}, {"ALL"}, {"All"}} {
+		got, err := resolveChecks(input)
+		require.NoError(t, err, "input=%v", input)
+		assert.Len(t, got, len(allChecks), "input=%v should resolve to all checks", input)
+	}
+}
+
+func TestResolveChecks_Specific(t *testing.T) {
+	got, err := resolveChecks([]string{"index", "vacuum"})
+	require.NoError(t, err)
+	assert.Equal(t, []CheckName{CheckIndex, CheckVacuum}, got)
+}
+
+func TestResolveChecks_CaseInsensitive(t *testing.T) {
+	got, err := resolveChecks([]string{"INDEX", "Buffer"})
+	require.NoError(t, err)
+	assert.Equal(t, []CheckName{CheckIndex, CheckBuffer}, got)
+}
+
+func TestResolveChecks_AllNames(t *testing.T) {
+	names := []string{"index", "connection", "vacuum", "sequence", "replication", "buffer", "constraint"}
+	got, err := resolveChecks(names)
+	require.NoError(t, err)
+	assert.Len(t, got, len(names))
+}
+
+func TestResolveChecks_InvalidName(t *testing.T) {
+	_, err := resolveChecks([]string{"bogus"})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "bogus")
+}
+
 // ─── runCheck default branch ──────────────────────────────────────────────────
 
 func TestRunCheck_UnknownCheck(t *testing.T) {
@@ -188,6 +223,7 @@ func seqRowNullLast(schema, name string, maxVal int64) map[string]any {
 		"data_type":  "bigint",
 		"max_value":  maxVal,
 		"last_value": nil,
+		"can_read":   true, // readable but never used
 		"usage_pct":  float64(0),
 	}
 }
@@ -216,6 +252,24 @@ func TestRunSequenceHealth_NullLastValue(t *testing.T) {
 
 	r := runSequenceHealth(ctx, mock)
 	assert.Equal(t, StatusOK, r.Status)
+}
+
+func TestRunSequenceHealth_PrivilegeRestricted(t *testing.T) {
+	// last_value is NULL because the role lacks privilege — should warn, not silently OK.
+	mock := dbtest.NewMock().AddInternalQuery(
+		[]map[string]any{{
+			"schema":     "public",
+			"name":       "id_seq",
+			"data_type":  "bigint",
+			"max_value":  int64(9223372036854775807),
+			"last_value": nil,
+			"can_read":   false, // no SELECT/USAGE privilege
+			"usage_pct":  float64(0),
+		}}, nil)
+
+	r := runSequenceHealth(ctx, mock)
+	assert.Equal(t, StatusWarning, r.Status)
+	assert.Contains(t, r.Message, "privileges")
 }
 
 func TestRunSequenceHealth_QueryError(t *testing.T) {

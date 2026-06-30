@@ -1,0 +1,32 @@
+# Disposable Postgres for the integration / E2E test suite.
+# Usage:
+#   docker-compose -f docker-compose.test.yml up -d --wait
+#   export TEST_DATABASE_URL="postgresql://postgres:test@localhost:5433/postgres_mcp_test?sslmode=disable"
+#   go test ./...
+#   docker-compose -f docker-compose.test.yml down -v
+
+services:
+  postgres-test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test-postgres
+    image: postgres-mcp-test-postgres:latest
+    ports:
+      - "5433:5432"   # 5433 to avoid clashing with a host-local pg on 5432
+    environment:
+      POSTGRES_PASSWORD: test
+      POSTGRES_DB: postgres_mcp_test
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_preload_libraries=pg_stat_statements"
+      - "-c"
+      - "pg_stat_statements.track=all"
+    volumes:
+      - ./test/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres_mcp_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 3s

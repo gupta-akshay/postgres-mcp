@@ -103,12 +103,17 @@ func queryByResource(ctx context.Context, d db.Querier, version int, limit int) 
 	totalCol := timeCol(version, "total")
 	meanCol := timeCol(version, "mean")
 
-	// WAL bytes column added in PG13
-	walCol := "0"
-	totalWalExpr := "0"
+	// WAL bytes column was added in PG13. On PG12, use literal 0 expressions
+	// instead of column references — "s.0" is not valid SQL.
+	var walBytesExpr, pctWalExpr, totalWalExpr string
 	if version >= 130000 {
-		walCol = "wal_bytes"
+		walBytesExpr = "COALESCE(s.wal_bytes, 0)"
+		pctWalExpr = "round((COALESCE(s.wal_bytes, 0) / NULLIF(t.total_wal, 0) * 100)::numeric, 2)"
 		totalWalExpr = "sum(wal_bytes)"
+	} else {
+		walBytesExpr = "0"
+		pctWalExpr = "0"
+		totalWalExpr = "0"
 	}
 
 	sql := fmt.Sprintf(`
@@ -128,10 +133,10 @@ func queryByResource(ctx context.Context, d db.Querier, version int, limit int) 
 				s.rows,
 				s.shared_blks_hit,
 				s.shared_blks_read,
-				COALESCE(s.%s, 0)        AS wal_bytes,
+				%s                       AS wal_bytes,
 				round((s.%s / NULLIF(t.total_time,   0) * 100)::numeric, 2) AS pct_time,
-				round(((s.shared_blks_hit + s.shared_blks_read) / NULLIF(t.total_blocks, 0) * 100)::numeric, 2) AS pct_blocks,
-				round((COALESCE(s.%s, 0) / NULLIF(t.total_wal,  0) * 100)::numeric, 2) AS pct_wal
+				round((100.0 * (s.shared_blks_hit + s.shared_blks_read) / NULLIF(t.total_blocks, 0))::numeric, 2) AS pct_blocks,
+				%s                       AS pct_wal
 			FROM pg_stat_statements s, totals t
 			WHERE s.query NOT LIKE $1
 		)
@@ -139,7 +144,7 @@ func queryByResource(ctx context.Context, d db.Querier, version int, limit int) 
 		WHERE pct_time > 5 OR pct_blocks > 5 OR pct_wal > 5
 		ORDER BY (pct_time + pct_blocks + COALESCE(pct_wal, 0)) DESC
 		LIMIT $2
-	`, totalCol, totalWalExpr, totalCol, meanCol, walCol, totalCol, walCol)
+	`, totalCol, totalWalExpr, totalCol, meanCol, walBytesExpr, totalCol, pctWalExpr)
 
 	rows, err := d.QueryRows(ctx, sql, "%/* postgres-mcp */%", limit)
 	if err != nil {

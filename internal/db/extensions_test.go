@@ -26,6 +26,9 @@ func (s *stubQuerier) Execute(_ context.Context, _ string, _ ...any) error { ret
 func (s *stubQuerier) Version(_ context.Context) (int, error)              { return 150000, nil }
 func (s *stubQuerier) IsRestricted() bool                                  { return false }
 func (s *stubQuerier) Close()                                              {}
+func (s *stubQuerier) WithConn(_ context.Context, fn func(context.Context, Querier) error) error {
+	return fn(context.Background(), s)
+}
 
 // ─── CheckExtension ───────────────────────────────────────────────────────────
 

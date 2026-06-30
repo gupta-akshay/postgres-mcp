@@ -65,8 +65,8 @@ func ExplainQuery(
 		defs[i] = h.Definition
 	}
 
-	hypoPlan, err := withHypotheticalIndexes(ctx, d, defs, func() (*PlanResult, error) {
-		return runExplain(ctx, d, query, false, false)
+	hypoPlan, err := withHypotheticalIndexes(ctx, d, defs, func(q db.Querier) (*PlanResult, error) {
+		return runExplain(ctx, q, query, false, false)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("explain with hypothetical indexes: %w", err)
@@ -95,8 +95,8 @@ func GetQueryCostWithIndexes(ctx context.Context, d db.Querier, query string, in
 	var cost float64
 	var planErr error
 
-	_, err := withHypotheticalIndexes(ctx, d, indexDefs, func() (*PlanResult, error) {
-		plan, err := runExplain(ctx, d, query, false, false)
+	_, err := withHypotheticalIndexes(ctx, d, indexDefs, func(q db.Querier) (*PlanResult, error) {
+		plan, err := runExplain(ctx, q, query, false, false)
 		if plan != nil {
 			cost = plan.TotalCost
 		}
@@ -112,6 +112,12 @@ func GetQueryCostWithIndexes(ctx context.Context, d db.Querier, query string, in
 // ─── internal helpers ────────────────────────────────────────────────────────
 
 func runExplain(ctx context.Context, d db.Querier, query string, analyze, generic bool) (*PlanResult, error) {
+	// EXPLAIN ANALYZE actually executes the query; block it in restricted mode to
+	// prevent write side-effects from slipping through via EXPLAIN.
+	if analyze && d.IsRestricted() {
+		return nil, fmt.Errorf("EXPLAIN ANALYZE is not permitted in restricted mode")
+	}
+
 	opts := []string{"FORMAT JSON", "COSTS true"}
 	if analyze {
 		opts = append(opts, "ANALYZE true", "BUFFERS true")
@@ -167,24 +173,29 @@ func runExplain(ctx context.Context, d db.Querier, query string, analyze, generi
 	return result, nil
 }
 
-// withHypotheticalIndexes creates hypothetical indexes via HypoPG, runs fn,
-// then resets all hypothetical indexes regardless of fn's outcome.
-func withHypotheticalIndexes(ctx context.Context, d db.Querier, defs []string, fn func() (*PlanResult, error)) (*PlanResult, error) {
-	// Create each hypothetical index
-	for _, def := range defs {
-		_, err := d.InternalQuery(ctx, fmt.Sprintf("SELECT hypopg_create_index('%s')", escapeSingleQuotes(def)))
-		if err != nil {
-			d.InternalQuery(ctx, "SELECT hypopg_reset()") //nolint:errcheck
-			return nil, fmt.Errorf("create hypothetical index %q: %w", def, err)
+// withHypotheticalIndexes pins all HypoPG operations (create, explain, reset)
+// to a single connection so that session-local hypothetical indexes are visible
+// to the EXPLAIN call. fn receives the pinned Querier and must use it for all
+// database access within the callback.
+func withHypotheticalIndexes(ctx context.Context, d db.Querier, defs []string, fn func(db.Querier) (*PlanResult, error)) (*PlanResult, error) {
+	var result *PlanResult
+	err := d.WithConn(ctx, func(ctx context.Context, q db.Querier) error {
+		for _, def := range defs {
+			_, createErr := q.InternalQuery(ctx, fmt.Sprintf("SELECT hypopg_create_index('%s')", escapeSingleQuotes(def)))
+			if createErr != nil {
+				q.InternalQuery(ctx, "SELECT hypopg_reset()") //nolint:errcheck
+				return fmt.Errorf("create hypothetical index %q: %w", def, createErr)
+			}
 		}
-	}
 
-	result, fnErr := fn()
+		var fnErr error
+		result, fnErr = fn(q)
 
-	// Always reset, even on error
-	d.InternalQuery(ctx, "SELECT hypopg_reset()") //nolint:errcheck
-
-	return result, fnErr
+		// Always reset, even on error
+		q.InternalQuery(ctx, "SELECT hypopg_reset()") //nolint:errcheck
+		return fnErr
+	})
+	return result, err
 }
 
 func escapeSingleQuotes(s string) string {
