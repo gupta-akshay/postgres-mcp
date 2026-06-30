@@ -169,3 +169,76 @@ func TestGetTopQueries_Resource_PG12(t *testing.T) {
 	require.Len(t, stats, 1)
 	assert.Equal(t, int64(0), stats[0].WalBytes)
 }
+
+// ─── helpers (pure unit, no DB) ───────────────────────────────────────────────
+
+func TestTimeCol(t *testing.T) {
+	cases := []struct {
+		version int
+		base    string
+		want    string
+	}{
+		{130000, "total", "total_exec_time"},
+		{130000, "mean", "mean_exec_time"},
+		{130000, "stddev", "stddev_exec_time"},
+		{120007, "total", "total_time"},
+		{120007, "mean", "mean_time"},
+		{120007, "stddev", "stddev_time"},
+		{140001, "total", "total_exec_time"},
+	}
+	for _, tc := range cases {
+		got := timeCol(tc.version, tc.base)
+		assert.Equal(t, tc.want, got, "version=%d base=%s", tc.version, tc.base)
+	}
+}
+
+func TestMapToStats_Basic(t *testing.T) {
+	rows := []map[string]any{
+		{
+			"query":               "SELECT * FROM users WHERE id = $1",
+			"calls":               int64(42),
+			"total_exec_time_ms":  float64(1234.56),
+			"mean_exec_time_ms":   float64(29.39),
+			"stddev_exec_time_ms": float64(5.12),
+			"rows":                int64(42),
+		},
+	}
+	stats := mapToStats(rows)
+	require.Len(t, stats, 1)
+	s := stats[0]
+	assert.Equal(t, "SELECT * FROM users WHERE id = $1", s.Query)
+	assert.Equal(t, int64(42), s.Calls)
+	assert.InDelta(t, 1234.56, s.TotalExecTimeMS, 0.01)
+	assert.InDelta(t, 29.39, s.MeanExecTimeMS, 0.01)
+	assert.InDelta(t, 5.12, s.StddevExecTimeMS, 0.01)
+	assert.Equal(t, int64(42), s.Rows)
+}
+
+func TestMapToStats_EmptyRows(t *testing.T) {
+	stats := mapToStats(nil)
+	assert.Empty(t, stats)
+}
+
+func TestMapToStats_MissingFields(t *testing.T) {
+	rows := []map[string]any{
+		{"query": "SELECT 1"},
+	}
+	stats := mapToStats(rows)
+	require.Len(t, stats, 1)
+	assert.Equal(t, "SELECT 1", stats[0].Query)
+	assert.Equal(t, int64(0), stats[0].Calls)
+	assert.Equal(t, float64(0), stats[0].TotalExecTimeMS)
+}
+
+func TestMapToStats_MultipleRows(t *testing.T) {
+	rows := []map[string]any{
+		{"query": "SELECT 1", "calls": int64(1)},
+		{"query": "SELECT 2", "calls": int64(2)},
+		{"query": "SELECT 3", "calls": int64(3)},
+	}
+	stats := mapToStats(rows)
+	require.Len(t, stats, 3)
+	assert.Equal(t, int64(1), stats[0].Calls)
+	assert.Equal(t, int64(2), stats[1].Calls)
+	assert.Equal(t, int64(3), stats[2].Calls)
+}

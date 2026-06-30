@@ -154,6 +154,22 @@ func TestGetQueryCostWithIndexes_HypopgCreateError(t *testing.T) {
 
 // ─── runExplain ───────────────────────────────────────────────────────────────
 
+func TestRunExplain_AnalyzeBlockedInRestrictedMode(t *testing.T) {
+	mock := dbtest.NewMock().SetRestricted(true)
+
+	_, err := runExplain(context.Background(), mock, "DELETE FROM t WHERE id = 1", true, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "restricted")
+}
+
+func TestRunExplain_AnalyzeAllowedWhenUnrestricted(t *testing.T) {
+	mock := dbtest.NewMock().AddInternalQuery(explainRow(analyzeExplainJSON), nil)
+
+	res, err := runExplain(context.Background(), mock, "SELECT 1", true, false)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.01, res.TotalCost, 0.001)
+}
+
 func TestRunExplain_InvalidJSON(t *testing.T) {
 	mock := dbtest.NewMock().AddInternalQuery(
 		[]map[string]any{{"QUERY PLAN": "not json"}}, nil)
@@ -230,4 +246,27 @@ func TestExplainQuery_ImprovementZeroBaseCost(t *testing.T) {
 	require.NoError(t, err)
 	// Improvement should be 0 when base cost is 0
 	assert.Equal(t, 0.0, res.Improvement)
+}
+
+// ─── helpers (pure unit, no DB) ───────────────────────────────────────────────
+
+func TestEscapeSingleQuotes(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"no quotes", "no quotes"},
+		{"it's", "it''s"},
+		{"'quoted'", "''quoted''"},
+		{"a'b'c", "a''b''c"},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		got := escapeSingleQuotes(tc.in)
+		assert.Equal(t, tc.want, got, "input: %q", tc.in)
+	}
+}
+
+func TestMax(t *testing.T) {
+	assert.Equal(t, 10.0, max(10, 5))
+	assert.Equal(t, 10.0, max(5, 10))
+	assert.Equal(t, 5.0, max(5, 5))
+	assert.Equal(t, 0.001, max(0.001, 0.0))
 }

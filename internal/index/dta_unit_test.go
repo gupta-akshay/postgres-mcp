@@ -560,3 +560,88 @@ func TestComputeCosts_ExplainError(t *testing.T) {
 	costs := computeCosts(ctx, mock, []string{"INVALID"}, nil)
 	assert.Empty(t, costs)
 }
+
+// ─── hasSimilarIndex ──────────────────────────────────────────────────────────
+
+func TestHasSimilarIndex_ExactMatch(t *testing.T) {
+	existing := map[string]bool{
+		"CREATE INDEX users_email_idx ON users (email)": true,
+	}
+	def := IndexDefinition{Table: "users", Columns: []string{"email"}}
+	assert.True(t, hasSimilarIndex(existing, def), "exact column match should be filtered")
+}
+
+func TestHasSimilarIndex_LeadingPrefix(t *testing.T) {
+	// Existing multi-column index: (tenant_id, status)
+	// Proposed single-column index: (tenant_id) — it IS a leading prefix.
+	existing := map[string]bool{
+		"CREATE INDEX idx ON orders (tenant_id, status)": true,
+	}
+	def := IndexDefinition{Table: "orders", Columns: []string{"tenant_id"}}
+	assert.True(t, hasSimilarIndex(existing, def), "(tenant_id) is a leading prefix of (tenant_id, status)")
+}
+
+func TestHasSimilarIndex_NotLeadingPrefix(t *testing.T) {
+	// Existing: (tenant_id, status). Proposed: (status) alone.
+	// (status) is NOT a leading prefix, so the recommendation should NOT be suppressed.
+	existing := map[string]bool{
+		"CREATE INDEX idx ON orders (tenant_id, status)": true,
+	}
+	def := IndexDefinition{Table: "orders", Columns: []string{"status"}}
+	assert.False(t, hasSimilarIndex(existing, def), "(status) is not a leading prefix of (tenant_id, status)")
+}
+
+func TestHasSimilarIndex_DifferentTable(t *testing.T) {
+	existing := map[string]bool{
+		"CREATE INDEX users_email_idx ON users (email)": true,
+	}
+	def := IndexDefinition{Table: "orders", Columns: []string{"email"}}
+	assert.False(t, hasSimilarIndex(existing, def), "different table should not match")
+}
+
+// ─── walkPlanNode ─────────────────────────────────────────────────────────────
+
+func TestWalkPlanNode_JoinConditionPropagated(t *testing.T) {
+	// Simulate a Hash Join node with a Hash Cond, and two child Seq Scan nodes.
+	// The join condition columns should be attributed to both child relation tables.
+	planJSON := map[string]any{
+		"Node Type": "Hash Join",
+		"Hash Cond": "(o.customer_id = c.id)",
+		"Plans": []any{
+			map[string]any{
+				"Node Type":     "Seq Scan",
+				"Relation Name": "orders",
+				"Schema":        "public",
+			},
+			map[string]any{
+				"Node Type": "Hash",
+				"Plans": []any{
+					map[string]any{
+						"Node Type":     "Seq Scan",
+						"Relation Name": "customers",
+						"Schema":        "public",
+					},
+				},
+			},
+		},
+	}
+
+	out := make(map[string][]string)
+	walkPlanNode(planJSON, out, "")
+
+	// Both tables should receive the join-condition columns
+	ordersFound := false
+	customersFound := false
+	for _, col := range out["public.orders"] {
+		if col == "customer_id" || col == "id" {
+			ordersFound = true
+		}
+	}
+	for _, col := range out["public.customers"] {
+		if col == "customer_id" || col == "id" {
+			customersFound = true
+		}
+	}
+	assert.True(t, ordersFound, "expected join condition columns attributed to public.orders")
+	assert.True(t, customersFound, "expected join condition columns attributed to public.customers")
+}
