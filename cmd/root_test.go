@@ -44,3 +44,15 @@ func TestRunE_AccessModeNotOverriddenWhenUnrestricted(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "database URI is required")
 }
+
+func TestRunE_AccessModeEnvOverrideReachesStart(t *testing.T) {
+	// Provide a non-empty DSN via positional arg so the empty-URI check is
+	// skipped, allowing execution to reach the ACCESS_MODE override on line 51.
+	// The DSN is intentionally unparseable so server.Start fails fast.
+	t.Setenv("ACCESS_MODE", "unrestricted")
+	cfg.AccessMode = "restricted"
+
+	err := rootCmd.RunE(rootCmd, []string{"://invalid-dsn"})
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "database URI is required")
+}

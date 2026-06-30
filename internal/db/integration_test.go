@@ -125,6 +125,43 @@ func TestQueryRows_SyntaxError_Restricted_Integration(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestCollectRows_DuplicateColumns_Integration(t *testing.T) {
+	d := integrationDB(t, false)
+	ctx := context.Background()
+
+	// Two columns with the same alias: one stays "n", the other becomes "n_1".
+	rows, err := d.InternalQuery(ctx, "SELECT 1 AS n, 2 AS n")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	_, hasN := rows[0]["n"]
+	_, hasN1 := rows[0]["n_1"]
+	assert.True(t, hasN && hasN1, "duplicate column names should be disambiguated")
+}
+
+func TestJsonFriendly_UUID_Integration(t *testing.T) {
+	d := integrationDB(t, false)
+	ctx := context.Background()
+
+	rows, err := d.InternalQuery(ctx, "SELECT gen_random_uuid() AS id")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	id, ok := rows[0]["id"].(string)
+	require.True(t, ok, "UUID column should be returned as string, got %T", rows[0]["id"])
+	assert.Len(t, id, 36, "UUID string should be 36 chars")
+}
+
+func TestWithConn_CancelledContext_Integration(t *testing.T) {
+	d := integrationDB(t, false)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately so pool.Acquire fails
+
+	err := d.WithConn(ctx, func(_ context.Context, _ Querier) error {
+		return nil
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "acquire connection")
+}
+
 func TestWithConn_AllMethods_Integration(t *testing.T) {
 	d := integrationDB(t, false)
 	ctx := context.Background()

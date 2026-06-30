@@ -599,6 +599,32 @@ func TestHasSimilarIndex_DifferentTable(t *testing.T) {
 	assert.False(t, hasSimilarIndex(existing, def), "different table should not match")
 }
 
+func TestHasSimilarIndex_NoParensInExisting(t *testing.T) {
+	// Existing def contains the table name but has no column list (no parens).
+	// extractIndexColumns returns nil → len(existCols) == 0 → continue.
+	existing := map[string]bool{
+		"create index users_idx on users using btree": true,
+	}
+	def := IndexDefinition{Table: "users", Columns: []string{"email"}}
+	assert.False(t, hasSimilarIndex(existing, def))
+}
+
+func TestHasSimilarIndex_ProposedLongerThanExisting(t *testing.T) {
+	// Proposed index has more columns than the existing one → can't be a leading prefix.
+	existing := map[string]bool{
+		"CREATE INDEX orders_status_idx ON orders (status)": true,
+	}
+	def := IndexDefinition{Table: "orders", Columns: []string{"status", "created_at"}}
+	assert.False(t, hasSimilarIndex(existing, def))
+}
+
+// ─── extractIndexColumns ──────────────────────────────────────────────────────
+
+func TestExtractIndexColumns_NoParens(t *testing.T) {
+	result := extractIndexColumns("create index no_parens_def on t using btree")
+	assert.Nil(t, result, "def without parens should return nil")
+}
+
 // ─── walkPlanNode ─────────────────────────────────────────────────────────────
 
 func TestWalkPlanNode_JoinConditionPropagated(t *testing.T) {

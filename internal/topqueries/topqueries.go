@@ -154,9 +154,6 @@ func queryByResource(ctx context.Context, d db.Querier, version int, limit int) 
 	stats := mapToStats(rows)
 	// fill resource-specific fields
 	for i, r := range rows {
-		if i >= len(stats) {
-			break
-		}
 		if v, ok := r["shared_blks_hit"]; ok {
 			f, _ := db.ToFloat64(v)
 			stats[i].SharedBlksHit = int64(f)

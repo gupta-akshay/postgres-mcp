@@ -102,9 +102,6 @@ func runDTA(ctx context.Context, d db.Querier, queries []string, cfg DTAConfig) 
 
 	for len(candidates) > 0 && time.Now().Before(deadline) {
 		best, bestCost, bestSizeMB := findBest(ctx, d, explainable, selected, candidates, baseCosts, cfg)
-		if best == nil {
-			break
-		}
 
 		// Check minimum improvement
 		currentCost := totalCostWith(ctx, d, explainable, selected)
