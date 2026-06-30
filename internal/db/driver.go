@@ -26,6 +26,10 @@ type Querier interface {
 	Version(ctx context.Context) (int, error)
 	IsRestricted() bool
 	Close()
+	// WithConn acquires a single connection from the pool and calls fn with a
+	// Querier that is pinned to that connection. This is required for operations
+	// that depend on session-local state (e.g. HypoPG hypothetical indexes).
+	WithConn(ctx context.Context, fn func(context.Context, Querier) error) error
 }
 
 // Driver wraps a pgxpool connection pool and enforces access-mode rules.
@@ -98,6 +102,17 @@ func (d *Driver) Execute(ctx context.Context, sql string, args ...any) error {
 	return nil
 }
 
+// WithConn acquires a single connection from the pool and calls fn with a
+// Querier that is pinned to that one connection.
+func (d *Driver) WithConn(ctx context.Context, fn func(context.Context, Querier) error) error {
+	conn, err := d.pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire connection: %w", err)
+	}
+	defer conn.Release()
+	return fn(ctx, &singleConnQuerier{conn: conn.Conn(), restricted: d.restricted})
+}
+
 // Version returns the PostgreSQL server version number (e.g. 150004).
 func (d *Driver) Version(ctx context.Context) (int, error) {
 	rows, err := d.InternalQuery(ctx, "SELECT current_setting('server_version_num')::int AS v")
@@ -112,6 +127,71 @@ func (d *Driver) Version(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	return int(v), nil
+}
+
+// ─── single-connection querier ───────────────────────────────────────────────
+
+// singleConnQuerier wraps a single *pgx.Conn so all calls target the same
+// backend session. Used by WithConn to pin session-local state (e.g. HypoPG).
+type singleConnQuerier struct {
+	conn       *pgx.Conn
+	restricted bool
+}
+
+func (c *singleConnQuerier) InternalQuery(ctx context.Context, sql string, args ...any) ([]map[string]any, error) {
+	rows, err := c.conn.Query(ctx, internalQueryTag+" "+sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return collectRows(rows)
+}
+
+func (c *singleConnQuerier) QueryRows(ctx context.Context, sql string, args ...any) ([]map[string]any, error) {
+	if c.restricted {
+		if err := validateNotWrite(sql); err != nil {
+			return nil, err
+		}
+	}
+	rows, err := c.conn.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return collectRows(rows)
+}
+
+func (c *singleConnQuerier) Execute(ctx context.Context, sql string, args ...any) error {
+	if c.restricted {
+		return fmt.Errorf("write operations are not permitted in restricted mode")
+	}
+	_, err := c.conn.Exec(ctx, sql, args...)
+	if err != nil {
+		return fmt.Errorf("exec: %w", err)
+	}
+	return nil
+}
+
+func (c *singleConnQuerier) Version(ctx context.Context) (int, error) {
+	rows, err := c.InternalQuery(ctx, "SELECT current_setting('server_version_num')::int AS v")
+	if err != nil {
+		return 0, err
+	}
+	if len(rows) == 0 {
+		return 0, fmt.Errorf("empty result for server_version_num")
+	}
+	v, err := toInt64(rows[0]["v"])
+	if err != nil {
+		return 0, err
+	}
+	return int(v), nil
+}
+
+func (c *singleConnQuerier) IsRestricted() bool { return c.restricted }
+func (c *singleConnQuerier) Close()             {}
+
+func (c *singleConnQuerier) WithConn(ctx context.Context, fn func(context.Context, Querier) error) error {
+	return fn(ctx, c)
 }
 
 // ─── internal helpers ────────────────────────────────────────────────────────
@@ -161,6 +241,8 @@ func (d *Driver) queryInReadOnlyTx(ctx context.Context, sql string, args ...any)
 }
 
 // collectRows converts pgx rows into a slice of string-keyed maps.
+// Duplicate column names (e.g. from SELECT * on a join) are disambiguated by
+// appending _1, _2, … so no value is silently overwritten.
 func collectRows(rows pgx.Rows) ([]map[string]any, error) {
 	fds := rows.FieldDescriptions()
 	var result []map[string]any
@@ -172,7 +254,17 @@ func collectRows(rows pgx.Rows) ([]map[string]any, error) {
 		}
 		row := make(map[string]any, len(fds))
 		for i, fd := range fds {
-			row[string(fd.Name)] = jsonFriendly(vals[i])
+			name := string(fd.Name)
+			if _, exists := row[name]; exists {
+				for n := 1; ; n++ {
+					candidate := fmt.Sprintf("%s_%d", name, n)
+					if _, dup := row[candidate]; !dup {
+						name = candidate
+						break
+					}
+				}
+			}
+			row[name] = jsonFriendly(vals[i])
 		}
 		result = append(result, row)
 	}

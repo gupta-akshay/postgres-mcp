@@ -1,0 +1,38 @@
+# docker-compose is the recommended way to run postgres-mcp in SSE mode.
+# For stdio mode (used directly by Claude Code / Cursor) see the README.
+#
+# Usage:
+#   cp .env.example .env   # fill in your DATABASE_URI
+#   docker-compose up -d
+
+services:
+  postgres-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: postgres-mcp:latest
+    ports:
+      # SSE endpoint is reachable at http://localhost:8000/sse
+      - "8000:8000"
+    environment:
+      DATABASE_URI: ${DATABASE_URI}
+      ACCESS_MODE: ${ACCESS_MODE:-unrestricted}
+    command:
+      - "--transport"
+      - "sse"
+      - "--sse-host"
+      - "0.0.0.0"
+      - "--sse-port"
+      - "8000"
+    restart: unless-stopped
+    # Allows the container to reach PostgreSQL running on the host machine.
+    # On macOS/Windows Docker Desktop this works automatically via host.docker.internal.
+    # On Linux this extra_hosts entry maps the alias to the Docker bridge gateway.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8000/sse"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
