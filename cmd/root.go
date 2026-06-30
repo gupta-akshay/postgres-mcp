@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spf13/cobra"
 	"github.com/gupta-akshay/postgres-mcp/internal/config"
 	"github.com/gupta-akshay/postgres-mcp/internal/server"
+	"github.com/spf13/cobra"
 )
 
 var cfg config.Config
