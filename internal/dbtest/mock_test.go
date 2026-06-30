@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gupta-akshay/postgres-mcp/internal/db"
 )
 
 func TestNewMock_Defaults(t *testing.T) {
@@ -82,6 +84,20 @@ func TestMock_Execute_Noop(t *testing.T) {
 func TestMock_Close_Noop(t *testing.T) {
 	m := NewMock()
 	m.Close()
+}
+
+func TestMock_WithConn(t *testing.T) {
+	m := NewMock().AddInternalQuery([]map[string]any{{"v": 1}}, nil)
+	var called bool
+	err := m.WithConn(context.Background(), func(ctx context.Context, q db.Querier) error {
+		called = true
+		rows, err := q.InternalQuery(ctx, "SELECT 1")
+		require.NoError(t, err)
+		assert.Len(t, rows, 1)
+		return nil
+	})
+	require.NoError(t, err)
+	assert.True(t, called)
 }
 
 // ─── helper builders ──────────────────────────────────────────────────────────

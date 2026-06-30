@@ -374,6 +374,30 @@ func TestRunReplicationHealth_LaggingStandby(t *testing.T) {
 	assert.Contains(t, r.Message, "not in streaming state")
 }
 
+func TestRunReplicationHealth_LagCritical(t *testing.T) {
+	mock := dbtest.NewMock()
+	mock.AddInternalQuery([]map[string]any{{"is_replica": false}}, nil)
+	mock.AddInternalQuery([]map[string]any{
+		{
+			"client_addr":         "10.0.0.3",
+			"state":               "streaming",
+			"sent_lsn":            "0/5000000",
+			"write_lsn":           "0/4000000",
+			"flush_lsn":           "0/4000000",
+			"replay_lsn":          "0/3000000",
+			"write_lag":           nil,
+			"flush_lag":           nil,
+			"replay_lag":          "00:06:00",
+			"replay_lag_critical": true,
+		},
+	}, nil)
+	mock.AddInternalQuery(nil, nil) // no slots
+
+	r := runReplicationHealth(ctx, mock)
+	assert.Equal(t, StatusWarning, r.Status)
+	assert.Contains(t, r.Message, "replay lag > 5 minutes")
+}
+
 func TestRunReplicationHealth_QueryError(t *testing.T) {
 	mock := dbtest.NewMock()
 	mock.AddInternalQuery(nil, errors.New("is_replica failed"))

@@ -125,6 +125,61 @@ func TestQueryRows_SyntaxError_Restricted_Integration(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestWithConn_AllMethods_Integration(t *testing.T) {
+	d := integrationDB(t, false)
+	ctx := context.Background()
+
+	err := d.WithConn(ctx, func(ctx context.Context, q Querier) error {
+		rows, err := q.InternalQuery(ctx, "SELECT 1 AS n")
+		require.NoError(t, err)
+		require.Len(t, rows, 1)
+
+		rows, err = q.QueryRows(ctx, "SELECT 2 AS m")
+		require.NoError(t, err)
+		require.Len(t, rows, 1)
+
+		err = q.Execute(ctx, "CREATE TEMP TABLE _pgmcp_conn_test (id int)")
+		require.NoError(t, err)
+
+		ver, err := q.Version(ctx)
+		require.NoError(t, err)
+		assert.GreaterOrEqual(t, ver, 120000)
+
+		assert.False(t, q.IsRestricted())
+		q.Close()
+
+		return q.WithConn(ctx, func(ctx context.Context, inner Querier) error {
+			rows, err := inner.InternalQuery(ctx, "SELECT 3 AS k")
+			require.NoError(t, err)
+			require.Len(t, rows, 1)
+			return nil
+		})
+	})
+	require.NoError(t, err)
+}
+
+func TestWithConn_Restricted_BlocksExecute_Integration(t *testing.T) {
+	d := integrationDB(t, true)
+	ctx := context.Background()
+
+	err := d.WithConn(ctx, func(ctx context.Context, q Querier) error {
+		return q.Execute(ctx, "CREATE TEMP TABLE should_not_exist (id int)")
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not permitted")
+}
+
+func TestWithConn_Restricted_BlocksQueryRows_Integration(t *testing.T) {
+	d := integrationDB(t, true)
+	ctx := context.Background()
+
+	err := d.WithConn(ctx, func(ctx context.Context, q Querier) error {
+		_, err := q.QueryRows(ctx, "DELETE FROM pg_class WHERE false")
+		return err
+	})
+	require.Error(t, err)
+}
+
 // ─── helper ───────────────────────────────────────────────────────────────────
 
 func integrationDB(t *testing.T, restricted bool) *Driver {
