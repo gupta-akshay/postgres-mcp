@@ -229,6 +229,20 @@ func TestHandler_ExplainQuery_DBError(t *testing.T) {
 	assert.True(t, res.IsError)
 }
 
+func TestHandler_ExplainQuery_RestrictedForcesAnalyzeFalse(t *testing.T) {
+	// In restricted mode, analyze=true is silently forced to false.
+	// The handler should still succeed (analyze=false runs without executing).
+	cfg := &config.Config{AccessMode: "restricted"}
+	mock := dbtest.NewMock().
+		SetRestricted(true).
+		AddInternalQuery(dbtest.ExplainJSON(0.5), nil)
+
+	res := callTool(t, newServer(t, mock, cfg), "explain_query",
+		map[string]any{"query": "SELECT 1", "analyze": true})
+	assert.False(t, res.IsError)
+	assert.Contains(t, resultText(t, res), "total_cost")
+}
+
 // ─── execute_sql ──────────────────────────────────────────────────────────────
 
 func TestHandler_ExecuteSQL_Success(t *testing.T) {
