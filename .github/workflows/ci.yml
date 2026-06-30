@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: postgres_mcp_test
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5433:5432
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.4"
+          cache: true
+
+      - name: Install hypopg + enable pg_stat_statements
+        run: |
+          docker exec ${{ job.services.postgres.id }} bash -c "apt-get update && apt-get install -y postgresql-17-hypopg"
+          docker exec ${{ job.services.postgres.id }} psql -U postgres -c "ALTER SYSTEM SET shared_preload_libraries='pg_stat_statements'"
+          docker restart ${{ job.services.postgres.id }}
+          for i in {1..30}; do
+            if docker exec ${{ job.services.postgres.id }} pg_isready -U postgres; then break; fi
+            sleep 2
+          done
+          docker exec ${{ job.services.postgres.id }} psql -U postgres -d postgres_mcp_test -c "CREATE EXTENSION IF NOT EXISTS pg_stat_statements; CREATE EXTENSION IF NOT EXISTS hypopg;"
+
+      - name: Lint
+        run: |
+          go vet ./...
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "gofmt needs to run on:"
+            gofmt -l .
+            exit 1
+          fi
+
+      - name: Build
+        run: go build -o postgres-mcp .
+
+      - name: Test with coverage
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:test@localhost:5433/postgres_mcp_test?sslmode=disable
+        run: go test -count=1 -tags integration -coverprofile=coverage.out ./...
+
+      - name: Coverage summary
+        run: go tool cover -func=coverage.out | tail -30
+
+      - name: Enforce >= 95% overall coverage
+        run: |
+          total=$(go tool cover -func=coverage.out | awk '/^total:/ {print substr($3, 1, length($3)-1)}')
+          echo "Overall coverage: ${total}%"
+          awk -v t="$total" 'BEGIN { if (t+0 < 95) { print "coverage "t"% < 95% threshold"; exit 1 } }'
