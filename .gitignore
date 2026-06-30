@@ -1,0 +1,15 @@
+# Compiled binary
+postgres-mcp
+
+# Environment files with credentials — never commit these
+.env
+
+# Go build cache
+/vendor/
+
+# Test coverage — never commit (regenerate with go test -cover)
+coverage.out
+coverage.html
+
+# Claude Settings
+.claude/
