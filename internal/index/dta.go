@@ -217,26 +217,42 @@ var columnPattern = regexp.MustCompile(
 	`\b([a-zA-Z_]\w*)` +
 		`\s*(?:=|<>|!=|<=|>=|<|>|~~\*?|!~~\*?|IS\s|IS\s+NOT\s|IN\s*\(|LIKE\s|ILIKE\s|BETWEEN\s|@>|<@|@@)`)
 
+// walkPlanNode is the public entry point; joinCols starts empty.
 func walkPlanNode(node map[string]any, out map[string][]string, currentTable string) {
-	// Determine relation for this node
+	walkPlanNodeInternal(node, out, currentTable, nil)
+}
+
+// walkPlanNodeInternal recurses through EXPLAIN JSON.  joinCols carries columns
+// from ancestor join nodes that could not be attributed yet (no Relation Name at
+// that level); they are attributed to the first child that resolves a relation.
+func walkPlanNodeInternal(node map[string]any, out map[string][]string, currentTable string, joinCols []string) {
+	hasRelation := false
 	if rel, ok := node["Relation Name"].(string); ok {
-		schema := ""
-		if s, ok := node["Schema"].(string); ok {
-			schema = s
-		}
+		hasRelation = true
+		schema, _ := node["Schema"].(string)
 		if schema != "" {
 			currentTable = schema + "." + rel
 		} else {
 			currentTable = rel
 		}
+		// Attribute join-condition columns collected at ancestor join nodes
+		if len(joinCols) > 0 {
+			out[currentTable] = append(out[currentTable], joinCols...)
+		}
 	}
 
 	// Extract columns from condition strings
+	var pendingCols []string
 	for _, field := range planConditionFields {
 		if cond, ok := node[field].(string); ok {
 			cols := extractColumnsFromCondition(cond)
-			if currentTable != "" && len(cols) > 0 {
-				out[currentTable] = append(out[currentTable], cols...)
+			if len(cols) > 0 {
+				if currentTable != "" {
+					out[currentTable] = append(out[currentTable], cols...)
+				} else {
+					// Join/intermediate node with no relation: save for child scans
+					pendingCols = append(pendingCols, cols...)
+				}
 			}
 		}
 	}
@@ -256,11 +272,21 @@ func walkPlanNode(node map[string]any, out map[string][]string, currentTable str
 		}
 	}
 
+	// Determine which columns to pass to child nodes.
+	// Once a relation is found (hasRelation || currentTable != ""), pending
+	// columns were already attributed; children inherit currentTable with no
+	// extra joinCols.  For join nodes with no relation, pass the accumulated
+	// pending set so the first child scan can attribute them.
+	var childJoinCols []string
+	if !hasRelation && currentTable == "" {
+		childJoinCols = append(joinCols, pendingCols...)
+	}
+
 	// Recurse into sub-plans
 	if plans, ok := node["Plans"].([]any); ok {
 		for _, p := range plans {
 			if pNode, ok := p.(map[string]any); ok {
-				walkPlanNode(pNode, out, currentTable)
+				walkPlanNodeInternal(pNode, out, currentTable, childJoinCols)
 			}
 		}
 	}
@@ -386,38 +412,44 @@ func findBest(
 	return bestCand, bestCost, bestSizeMB
 }
 
-// estimateIndexSizeMB estimates the size of an index by running a hypothetical
-// index creation and querying hypopg_relation_size.
+// estimateIndexSizeMB estimates the size of an index via HypoPG.  All three
+// calls (create, size, reset) are pinned to one connection so the session-local
+// hypothetical index is visible between calls.
 func estimateIndexSizeMB(ctx context.Context, d db.Querier, def IndexDefinition) float64 {
 	createSQL := def.CreateSQL()
-	rows, err := d.InternalQuery(ctx,
-		fmt.Sprintf("SELECT hypopg_create_index('%s')", escapeSQ(createSQL)))
-	if err != nil || len(rows) == 0 {
-		return 1.0 // fallback estimate
-	}
+	var sizeMB float64
 
-	indexoidF, _ := db.ToFloat64(rows[0]["indexrelid"])
-	if indexoidF == 0 {
-		// try "indexoid" column name variant
-		for _, v := range rows[0] {
-			if f, err := db.ToFloat64(v); err == nil && f > 0 {
-				indexoidF = f
-				break
+	_ = d.WithConn(ctx, func(ctx context.Context, q db.Querier) error {
+		// SELECT * expands the set-returning function so indexrelid is a named column.
+		rows, err := q.InternalQuery(ctx,
+			fmt.Sprintf("SELECT * FROM hypopg_create_index('%s')", escapeSQ(createSQL)))
+		if err != nil || len(rows) == 0 {
+			return nil // use fallback
+		}
+
+		indexoidF, _ := db.ToFloat64(rows[0]["indexrelid"])
+		if indexoidF == 0 {
+			// try any other positive numeric column as a fallback
+			for _, v := range rows[0] {
+				if f, err := db.ToFloat64(v); err == nil && f > 0 {
+					indexoidF = f
+					break
+				}
 			}
 		}
-	}
 
-	var sizeMB float64
-	if indexoidF > 0 {
-		sizeRows, err := d.InternalQuery(ctx,
-			fmt.Sprintf("SELECT hypopg_relation_size(%d) AS sz", int64(indexoidF)))
-		if err == nil && len(sizeRows) > 0 {
-			sz, _ := db.ToFloat64(sizeRows[0]["sz"])
-			sizeMB = sz / (1024 * 1024)
+		if indexoidF > 0 {
+			sizeRows, err := q.InternalQuery(ctx,
+				fmt.Sprintf("SELECT hypopg_relation_size(%d) AS sz", int64(indexoidF)))
+			if err == nil && len(sizeRows) > 0 {
+				sz, _ := db.ToFloat64(sizeRows[0]["sz"])
+				sizeMB = sz / (1024 * 1024)
+			}
 		}
-	}
 
-	d.InternalQuery(ctx, "SELECT hypopg_reset()") //nolint:errcheck
+		q.InternalQuery(ctx, "SELECT hypopg_reset()") //nolint:errcheck
+		return nil
+	})
 
 	if sizeMB == 0 {
 		sizeMB = 1.0
@@ -463,15 +495,58 @@ func filterExistingIndexes(ctx context.Context, d db.Querier, cands []candidate)
 }
 
 func hasSimilarIndex(existing map[string]bool, def IndexDefinition) bool {
-	// Build a minimal pattern to match against existing defs
-	tablePattern := strings.ToLower(def.Table)
-	colsPattern := strings.ToLower(strings.Join(def.Columns, ", "))
+	table := strings.ToLower(def.Table)
+	proposedCols := make([]string, len(def.Columns))
+	for i, c := range def.Columns {
+		proposedCols[i] = strings.ToLower(strings.TrimSpace(c))
+	}
+
 	for existDef := range existing {
-		if strings.Contains(existDef, tablePattern) && strings.Contains(existDef, colsPattern) {
+		existLower := strings.ToLower(existDef)
+		if !strings.Contains(existLower, table) {
+			continue
+		}
+		// Extract the column list from "... ON table (col1, col2, ...)"
+		existCols := extractIndexColumns(existLower)
+		if len(existCols) == 0 {
+			continue
+		}
+		// The proposed index is redundant only when its columns are a leading
+		// prefix of the existing index (or an exact match). A single-column
+		// proposal for (status) is NOT covered by (tenant_id, status) because
+		// the existing index cannot satisfy standalone queries on status alone.
+		if len(proposedCols) > len(existCols) {
+			continue
+		}
+		isPrefix := true
+		for i, c := range proposedCols {
+			if strings.TrimSpace(existCols[i]) != c {
+				isPrefix = false
+				break
+			}
+		}
+		if isPrefix {
 			return true
 		}
 	}
 	return false
+}
+
+// extractIndexColumns parses the column list from a lowercased index definition
+// string of the form "... on table (col1, col2, ...)".
+func extractIndexColumns(def string) []string {
+	start := strings.LastIndex(def, "(")
+	end := strings.LastIndex(def, ")")
+	if start < 0 || end <= start {
+		return nil
+	}
+	colStr := def[start+1 : end]
+	parts := strings.Split(colStr, ",")
+	cols := make([]string, len(parts))
+	for i, p := range parts {
+		cols[i] = strings.TrimSpace(p)
+	}
+	return cols
 }
 
 func removeSelected(cands []candidate, sel candidate) []candidate {

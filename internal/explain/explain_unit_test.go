@@ -154,6 +154,22 @@ func TestGetQueryCostWithIndexes_HypopgCreateError(t *testing.T) {
 
 // ─── runExplain ───────────────────────────────────────────────────────────────
 
+func TestRunExplain_AnalyzeBlockedInRestrictedMode(t *testing.T) {
+	mock := dbtest.NewMock().SetRestricted(true)
+
+	_, err := runExplain(context.Background(), mock, "DELETE FROM t WHERE id = 1", true, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "restricted")
+}
+
+func TestRunExplain_AnalyzeAllowedWhenUnrestricted(t *testing.T) {
+	mock := dbtest.NewMock().AddInternalQuery(explainRow(analyzeExplainJSON), nil)
+
+	res, err := runExplain(context.Background(), mock, "SELECT 1", true, false)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.01, res.TotalCost, 0.001)
+}
+
 func TestRunExplain_InvalidJSON(t *testing.T) {
 	mock := dbtest.NewMock().AddInternalQuery(
 		[]map[string]any{{"QUERY PLAN": "not json"}}, nil)

@@ -223,6 +223,7 @@ func seqRowNullLast(schema, name string, maxVal int64) map[string]any {
 		"data_type":  "bigint",
 		"max_value":  maxVal,
 		"last_value": nil,
+		"can_read":   true, // readable but never used
 		"usage_pct":  float64(0),
 	}
 }
@@ -251,6 +252,24 @@ func TestRunSequenceHealth_NullLastValue(t *testing.T) {
 
 	r := runSequenceHealth(ctx, mock)
 	assert.Equal(t, StatusOK, r.Status)
+}
+
+func TestRunSequenceHealth_PrivilegeRestricted(t *testing.T) {
+	// last_value is NULL because the role lacks privilege — should warn, not silently OK.
+	mock := dbtest.NewMock().AddInternalQuery(
+		[]map[string]any{{
+			"schema":     "public",
+			"name":       "id_seq",
+			"data_type":  "bigint",
+			"max_value":  int64(9223372036854775807),
+			"last_value": nil,
+			"can_read":   false, // no SELECT/USAGE privilege
+			"usage_pct":  float64(0),
+		}}, nil)
+
+	r := runSequenceHealth(ctx, mock)
+	assert.Equal(t, StatusWarning, r.Status)
+	assert.Contains(t, r.Message, "privileges")
 }
 
 func TestRunSequenceHealth_QueryError(t *testing.T) {

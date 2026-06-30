@@ -133,6 +133,10 @@ func (m *MockQuerier) QueryRows(_ context.Context, _ string, _ ...any) ([]map[st
 
 func (m *MockQuerier) Execute(_ context.Context, _ string, _ ...any) error { return nil }
 
+func (m *MockQuerier) WithConn(ctx context.Context, fn func(context.Context, db.Querier) error) error {
+	return fn(ctx, m)
+}
+
 func (m *MockQuerier) Version(_ context.Context) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/mark3labs/mcp-go/mcp"
-	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/gupta-akshay/postgres-mcp/internal/config"
 	"github.com/gupta-akshay/postgres-mcp/internal/db"
 	"github.com/gupta-akshay/postgres-mcp/internal/explain"
@@ -14,6 +12,8 @@ import (
 	"github.com/gupta-akshay/postgres-mcp/internal/index"
 	"github.com/gupta-akshay/postgres-mcp/internal/schema"
 	"github.com/gupta-akshay/postgres-mcp/internal/topqueries"
+	"github.com/mark3labs/mcp-go/mcp"
+	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
 // BuildServer constructs an MCP server with every tool registered against the
@@ -27,7 +27,7 @@ func BuildServer(cfg *config.Config, d db.Querier) *mcpserver.MCPServer {
 	)
 
 	registerSchemaTools(s, d)
-	registerExplainTool(s, d)
+	registerExplainTool(s, d, cfg)
 	registerExecuteTool(s, d, cfg)
 	registerTopQueriesTool(s, d)
 	registerHealthTool(s, d)
@@ -52,7 +52,13 @@ func Start(cfg *config.Config) error {
 	switch cfg.Transport {
 	case "sse":
 		addr := fmt.Sprintf("%s:%d", cfg.SSEHost, cfg.SSEPort)
-		baseURL := fmt.Sprintf("http://%s", addr)
+		// Bind address (0.0.0.0 / ::) is not connectable from clients; advertise
+		// localhost so SSE clients receive a reachable endpoint URL.
+		advertiseHost := cfg.SSEHost
+		if advertiseHost == "0.0.0.0" || advertiseHost == "::" {
+			advertiseHost = "localhost"
+		}
+		baseURL := fmt.Sprintf("http://%s:%d", advertiseHost, cfg.SSEPort)
 		sseServer := mcpserver.NewSSEServer(s, mcpserver.WithBaseURL(baseURL))
 		fmt.Printf("postgres-mcp listening on %s (SSE)\n", addr)
 		return sseServer.Start(addr)
@@ -130,7 +136,7 @@ func registerSchemaTools(s *mcpserver.MCPServer, d db.Querier) {
 
 // ─── explain tool ─────────────────────────────────────────────────────────────
 
-func registerExplainTool(s *mcpserver.MCPServer, d db.Querier) {
+func registerExplainTool(s *mcpserver.MCPServer, d db.Querier, cfg *config.Config) {
 	s.AddTool(
 		mcp.NewTool("explain_query",
 			mcp.WithDescription(
@@ -156,6 +162,11 @@ func registerExplainTool(s *mcpserver.MCPServer, d db.Querier) {
 				return mcp.NewToolResultError("'query' parameter is required"), nil
 			}
 			analyze := getBool(req, "analyze")
+			// EXPLAIN ANALYZE executes the query, which can mutate data.
+			// Force it off in restricted mode to prevent write side-effects.
+			if cfg.IsRestricted() {
+				analyze = false
+			}
 			hypoStrs := getStringArray(req, "hypothetical_indexes")
 
 			hypoIdxs := make([]explain.HypotheticalIndex, len(hypoStrs))
