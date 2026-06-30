@@ -231,3 +231,26 @@ func TestExplainQuery_ImprovementZeroBaseCost(t *testing.T) {
 	// Improvement should be 0 when base cost is 0
 	assert.Equal(t, 0.0, res.Improvement)
 }
+
+// ─── helpers (pure unit, no DB) ───────────────────────────────────────────────
+
+func TestEscapeSingleQuotes(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"no quotes", "no quotes"},
+		{"it's", "it''s"},
+		{"'quoted'", "''quoted''"},
+		{"a'b'c", "a''b''c"},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		got := escapeSingleQuotes(tc.in)
+		assert.Equal(t, tc.want, got, "input: %q", tc.in)
+	}
+}
+
+func TestMax(t *testing.T) {
+	assert.Equal(t, 10.0, max(10, 5))
+	assert.Equal(t, 10.0, max(5, 10))
+	assert.Equal(t, 5.0, max(5, 5))
+	assert.Equal(t, 0.001, max(0.001, 0.0))
+}

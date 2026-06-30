@@ -14,6 +14,41 @@ import (
 
 var ctx = context.Background()
 
+// ─── resolveChecks (pure unit) ────────────────────────────────────────────────
+
+func TestResolveChecks_All(t *testing.T) {
+	for _, input := range [][]string{nil, {}, {"all"}, {"ALL"}, {"All"}} {
+		got, err := resolveChecks(input)
+		require.NoError(t, err, "input=%v", input)
+		assert.Len(t, got, len(allChecks), "input=%v should resolve to all checks", input)
+	}
+}
+
+func TestResolveChecks_Specific(t *testing.T) {
+	got, err := resolveChecks([]string{"index", "vacuum"})
+	require.NoError(t, err)
+	assert.Equal(t, []CheckName{CheckIndex, CheckVacuum}, got)
+}
+
+func TestResolveChecks_CaseInsensitive(t *testing.T) {
+	got, err := resolveChecks([]string{"INDEX", "Buffer"})
+	require.NoError(t, err)
+	assert.Equal(t, []CheckName{CheckIndex, CheckBuffer}, got)
+}
+
+func TestResolveChecks_AllNames(t *testing.T) {
+	names := []string{"index", "connection", "vacuum", "sequence", "replication", "buffer", "constraint"}
+	got, err := resolveChecks(names)
+	require.NoError(t, err)
+	assert.Len(t, got, len(names))
+}
+
+func TestResolveChecks_InvalidName(t *testing.T) {
+	_, err := resolveChecks([]string{"bogus"})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "bogus")
+}
+
 // ─── runCheck default branch ──────────────────────────────────────────────────
 
 func TestRunCheck_UnknownCheck(t *testing.T) {

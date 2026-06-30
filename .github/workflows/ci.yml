@@ -58,7 +58,7 @@ jobs:
       - name: Test with coverage
         env:
           TEST_DATABASE_URL: postgresql://postgres:test@localhost:5433/postgres_mcp_test?sslmode=disable
-        run: go test -count=1 -coverprofile=coverage.out ./...
+        run: go test -count=1 -tags integration -coverprofile=coverage.out ./...
 
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -30

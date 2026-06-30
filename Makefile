@@ -9,13 +9,13 @@ COMPOSE       ?= docker compose
 build:
 	go build -o postgres-mcp .
 
-## Run unit tests only (no live DB needed — integration tests skip).
+## Run unit tests only (no live DB needed — integration tests excluded by build tag).
 test-unit:
 	go test $(GOFLAGS) ./...
 
-## Run the full suite against the disposable docker-compose Postgres.
+## Run the full suite (unit + integration) against the disposable docker-compose Postgres.
 test-integration: test-db-up test-db-wait
-	TEST_DATABASE_URL="$(TEST_DB_DSN)" go test $(GOFLAGS) ./...
+	TEST_DATABASE_URL="$(TEST_DB_DSN)" go test -tags integration $(GOFLAGS) ./...
 
 ## Alias: full suite.
 test: test-integration
@@ -36,7 +36,7 @@ test-db-down:
 
 ## Full-suite coverage report against the live test DB.
 coverage: test-db-up test-db-wait
-	TEST_DATABASE_URL="$(TEST_DB_DSN)" go test $(GOFLAGS) -coverprofile=$(COVERAGE_FILE) ./...
+	TEST_DATABASE_URL="$(TEST_DB_DSN)" go test -tags integration $(GOFLAGS) -coverprofile=$(COVERAGE_FILE) ./...
 	@go tool cover -func=$(COVERAGE_FILE) | tail -20
 	@echo "---"
 	@go tool cover -func=$(COVERAGE_FILE) | awk '/^total:/ {print "TOTAL coverage: "$$3}'

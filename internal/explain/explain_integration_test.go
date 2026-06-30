@@ -1,3 +1,5 @@
+//go:build integration
+
 package explain
 
 import (
@@ -10,31 +12,6 @@ import (
 
 	"github.com/gupta-akshay/postgres-mcp/internal/db"
 )
-
-// ─── unit tests ───────────────────────────────────────────────────────────────
-
-func TestEscapeSingleQuotes(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{"no quotes", "no quotes"},
-		{"it's", "it''s"},
-		{"'quoted'", "''quoted''"},
-		{"a'b'c", "a''b''c"},
-		{"", ""},
-	}
-	for _, tc := range cases {
-		got := escapeSingleQuotes(tc.in)
-		assert.Equal(t, tc.want, got, "input: %q", tc.in)
-	}
-}
-
-func TestMax(t *testing.T) {
-	assert.Equal(t, 10.0, max(10, 5))
-	assert.Equal(t, 10.0, max(5, 10))
-	assert.Equal(t, 5.0, max(5, 5))
-	assert.Equal(t, 0.001, max(0.001, 0.0))
-}
-
-// ─── integration tests ────────────────────────────────────────────────────────
 
 func TestExplainQuery_Basic_Integration(t *testing.T) {
 	d := integrationDB(t)
@@ -84,7 +61,6 @@ func TestExplainQuery_WithHypotheticalIndexes_Integration(t *testing.T) {
 	d := integrationDB(t)
 	ctx := context.Background()
 
-	// Check whether HypoPG is available; skip gracefully if not
 	info, err := db.CheckExtension(ctx, d, "hypopg")
 	require.NoError(t, err)
 	if !info.Installed {
@@ -111,8 +87,6 @@ func TestExplainQuery_WithHypotheticalIndexes_Integration(t *testing.T) {
 	require.NotNil(t, result.HypoPlan, "hypothetical plan should be present")
 	assert.GreaterOrEqual(t, result.Improvement, 0.0)
 }
-
-// ─── helper ───────────────────────────────────────────────────────────────────
 
 func integrationDB(t *testing.T) *db.Driver {
 	t.Helper()
