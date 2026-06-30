@@ -174,10 +174,10 @@ Workload query text is loaded with **`InternalQuery`** (and excludes the postgre
 
 ## Testing
 
-- **Unit tests** — packages use `dbtest.NewMock()` and enqueue `AddInternalQuery` / `AddQueryRows` responses in order. Helpers like `ExplainJSON`, `ExtensionInstalled` build row shapes the production code expects.
-- **Integration tests** — `internal/db/integration_test.go` (and similar) may require a real `DATABASE_URL`; skip when unset.
+- **Unit tests** — packages use `dbtest.NewMock()` and enqueue `AddInternalQuery` / `AddQueryRows` responses in order. Helpers like `ExplainJSON`, `ExtensionInstalled` build row shapes the production code expects. Run with `go test ./...` — no database required.
+- **Integration tests** — files tagged `//go:build integration` (named `*_integration_test.go` or `integration_test.go`) require a live `TEST_DATABASE_URL`. Run with `go test -tags integration ./...`. Excluded from `go test ./...` entirely — no skip noise.
 
-When adding a new code path that issues SQL, decide whether it must be **`QueryRows`** (respects restricted mode for tool-surfaced SQL) or **`InternalQuery`** (trusted server operations).
+When adding a new code path that issues SQL, decide whether it must be **`QueryRows`** (respects restricted mode for tool-surfaced SQL) or **`InternalQuery`** (trusted server operations). Add unit tests in a `*_unit_test.go` file using `MockQuerier`; add DB-dependent tests in a `*_integration_test.go` file with the `//go:build integration` tag.
 
 ## Debugging checklist
 

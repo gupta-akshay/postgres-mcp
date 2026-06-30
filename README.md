@@ -319,7 +319,7 @@ The test suite is split into **unit tests** (no database required) and **integra
 ### Quick commands (via Makefile)
 
 ```bash
-make test-unit         # unit tests only (integration tests skip)
+make test-unit         # unit tests only (no live DB required)
 make test-integration  # spins up docker-compose Postgres, runs the full suite
 make coverage          # full suite with coverage profile (expects ≥ 95% total)
 make test-db-up        # start disposable Postgres (with pg_stat_statements + hypopg)
@@ -329,12 +329,12 @@ make test-db-down      # stop and remove the disposable DB
 ### Manual
 
 ```bash
-# unit only
+# unit only (integration test files excluded by //go:build integration tag)
 go test ./...
 
 # full suite against any Postgres you choose
 export TEST_DATABASE_URL="postgresql://postgres:test@localhost:5433/postgres_mcp_test?sslmode=disable"
-go test ./... -coverprofile=coverage.out
+go test -tags integration ./... -coverprofile=coverage.out
 go tool cover -html=coverage.out
 ```
 

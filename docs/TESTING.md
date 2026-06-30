@@ -24,9 +24,9 @@ A peer who has never used the tool should be able to follow it end-to-end.
 
 ## 2. Automated tests
 
-- [ ] `make test-unit` — all green, no failures
+- [ ] `make test-unit` — all green, no failures, no skips (integration files excluded by `//go:build integration`)
 - [ ] `make test-db-up && make test-db-wait` — disposable Postgres is ready
-- [ ] `make test-integration` — all green against the disposable DB
+- [ ] `make test-integration` — all green against the disposable DB (runs with `-tags integration`)
 - [ ] `make coverage` — overall coverage ≥ 95 %
 - [ ] `make test-db-down` — stack torn down cleanly
 
