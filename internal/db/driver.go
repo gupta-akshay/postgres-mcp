@@ -38,6 +38,12 @@ type Driver struct {
 	restricted bool
 }
 
+// poolFactory is the function used to create a pgxpool.Pool. It is a
+// package-level variable so unit tests can inject a failing factory.
+var poolFactory = func(ctx context.Context, cfg *pgxpool.Config) (*pgxpool.Pool, error) {
+	return pgxpool.NewWithConfig(ctx, cfg)
+}
+
 // Compile-time check: *Driver must satisfy Querier.
 var _ Querier = (*Driver)(nil)
 
@@ -49,7 +55,7 @@ func New(ctx context.Context, dsn string, restricted bool) (*Driver, error) {
 		return nil, fmt.Errorf("parse database URL: %w", err)
 	}
 
-	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	pool, err := poolFactory(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create connection pool: %w", err)
 	}
